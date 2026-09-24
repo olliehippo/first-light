@@ -1,6 +1,6 @@
 {
   "name": "first-light",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "A calm morning dashboard for your Mac: combined inbox, calendars, to-dos, weather and a personal news brief written by Claude.",
   "main": "src/main.js",
   "scripts": {
