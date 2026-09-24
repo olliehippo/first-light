@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Add the Google OAuth client (from the GOOGLE_CLIENT_JSON secret, optional)
+        env:
+          GOOGLE_CLIENT_JSON: ${{ secrets.GOOGLE_CLIENT_JSON }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_JSON" ]; then printf '%s' "$GOOGLE_CLIENT_JSON" > src/google-client.json; fi
+      - name: Build
+        run: ARCH=arm64,x64 npm run pack
+      - name: Sign ad hoc
+        run: |
+          for a in arm64 x64; do codesign --force --deep --sign - "out/First Light-darwin-$a/First Light.app"; done
+      - name: Zip
+        run: |
+          cd "out/First Light-darwin-arm64" && ditto -c -k --keepParent "First Light.app" ../../First-Light-mac-arm64.zip && cd ../..
+          cd "out/First Light-darwin-x64" && ditto -c -k --keepParent "First Light.app" ../../First-Light-mac-x64.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            First-Light-mac-arm64.zip
+            First-Light-mac-x64.zip
+          generate_release_notes: true
