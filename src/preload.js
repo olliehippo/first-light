@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('mm', {
   removeAccount: id => call('accounts:remove', id),
   updateAccount: (id, patch) => call('accounts:update', { id, patch }),
   refreshAccounts: () => call('accounts:refresh'),
+  setPriority: data => call('mail:setPriority', data),
   refreshBrief: () => call('brief:refresh'),
   setPrefs: patch => call('prefs:set', patch),
   customise: wishes => call('prefs:customise', wishes),

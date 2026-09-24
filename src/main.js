@@ -80,6 +80,7 @@ function loadConfig() {
     brief: raw.brief && Array.isArray(raw.brief.sections) ? raw.brief : null,
     accounts: Array.isArray(raw.accounts) && raw.schema === 2 ? raw.accounts.filter(validAccount) : [],
     engine: 'feeds',
+    priority: raw.priority && typeof raw.priority === 'object' ? { msgs: Object.assign({}, raw.priority.msgs), senders: Object.assign({}, raw.priority.senders) } : { msgs: {}, senders: {} },
     todos: Array.isArray(raw.todos) ? raw.todos.filter(t => t && t.id && typeof t.text === 'string').slice(0, 500) : [],
     weather: raw.weather && Number.isFinite(raw.weather.lat) ? raw.weather : { name: 'London', lat: 51.5072, lon: -0.1276 }
   };
@@ -279,6 +280,15 @@ async function refreshAccounts(which = 'all') {
 // Priority: Gmail's own Important/Starred signal outside Promotions, Social, Forums and Updates.
 // Other mailboxes: flagged mail, or unread mail that doesn't look automated.
 const BULK_SENDER = /(no-?reply|do-?not-?reply|newsletter|notifications?|mailer|marketing|news@|info@|updates?@|hello@|team@|support@|billing@|receipts?@|digest|alerts?@)/i;
+// Your own choices (dragging an email into Priority, or removing one) win over the automatic rules.
+const msgKey = (a, m) => `${a.id}:${m.uid}`;
+const senderKey = m => String(m.from.address || '').toLowerCase();
+function priorityOf(m, a) {
+  const k = msgKey(a, m), s = senderKey(m);
+  if (k in cfg.priority.msgs) return { priority: cfg.priority.msgs[k], reason: 'you' };
+  if (s && s in cfg.priority.senders) return { priority: cfg.priority.senders[s], reason: 'sender' };
+  return { priority: isPriority(m, a), reason: 'auto' };
+}
 function isPriority(m, a) {
   if (a.type === 'google') return !!m.important && !m.bulk;
   if (m.flagged) return true;
@@ -291,7 +301,7 @@ function combinedInbox() {
   for (const a of cfg.accounts) {
     if (a.type === 'ical' || (a.type === 'google' && a.mail === false)) continue;
     const st = L(a.id); unread += st.unread || 0;
-    for (const m of st.messages) all.push({ ...m, accountId: a.id, accountEmail: a.email, accountColor: a.color, provider: a.type === 'google' ? 'gmail' : (mail.PRESETS[a.preset] || {}).web || '', priority: isPriority(m, a) });
+    for (const m of st.messages) all.push({ ...m, accountId: a.id, accountEmail: a.email, accountColor: a.color, provider: a.type === 'google' ? 'gmail' : (mail.PRESETS[a.preset] || {}).web || '', key: msgKey(a, m), ...(({ priority, reason }) => ({ priority, priorityReason: reason }))(priorityOf(m, a)) });
   }
   all.sort((x, y) => y.date.localeCompare(x.date));
   return { unread, priorityUnread: all.filter(x => x.priority && x.unread).length, messages: all.slice(0, 60) };
@@ -556,6 +566,25 @@ const todoPatch = (t, p) => {
   if (p.due === null || p.due === '' || /^\d{4}-\d{2}-\d{2}$/.test(p.due || '')) t.due = p.due || null;
   if (typeof p.starred === 'boolean') t.starred = p.starred;
 };
+ipcMain.handle('mail:setPriority', (_e, { key, sender, value, scope }) => {
+  value = !!value;
+  const s = String(sender || '').toLowerCase();
+  if (scope === 'sender') {
+    if (!s) return fail('This email has no sender address.');
+    cfg.priority.senders[s] = value;
+    // the sender rule now decides, so drop per-message choices for that sender that agree with it
+    for (const a of cfg.accounts) for (const msg of L(a.id).messages) if (senderKey(msg) === s && cfg.priority.msgs[msgKey(a, msg)] === value) delete cfg.priority.msgs[msgKey(a, msg)];
+  } else {
+    if (!/^[a-f0-9]{12}:.+$/.test(String(key || ''))) return fail('Email not found.');
+    cfg.priority.msgs[key] = value;
+    if (!value && s && cfg.priority.senders[s] === true) delete cfg.priority.senders[s];
+  }
+  // keep the list of remembered emails from growing forever
+  const keys = Object.keys(cfg.priority.msgs); if (keys.length > 2000) for (const k of keys.slice(0, keys.length - 2000)) delete cfg.priority.msgs[k];
+  save(); push();
+  return ok();
+});
+
 ipcMain.handle('todos:add', (_e, p) => {
   const text = String((p && p.text) || '').trim();
   if (!text) return fail('Type a task first.');

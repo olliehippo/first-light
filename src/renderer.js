@@ -172,11 +172,11 @@
   }
   function mailRow(m) {
     const url = webLink(m), tag = url ? 'a' : 'div', name = senderName(m), multi = S.accounts.filter(a => a.mail).length > 1;
-    return `<${tag} class="content-row mail-row ${m.unread ? 'is-unread' : ''}" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ''} title="${esc(m.from.address)} to ${esc(m.accountEmail)}">
+    return `<${tag} class="content-row mail-row ${m.unread ? 'is-unread' : ''} ${m.priority ? 'is-priority' : ''}" draggable="true" data-key="${esc(m.key)}" data-sender="${esc(m.from.address)}" data-name="${esc(name)}" data-prio="${m.priority ? 1 : 0}" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ''} title="${esc(m.from.address)} to ${esc(m.accountEmail)}${m.priority ? '' : ' \u00B7 drag onto Priority to keep it on Today'}">
       <span class="unread-dot ${m.unread ? '' : 'read'}"></span>
       <span class="avatar av-${tintFor(name)}" aria-hidden="true">${esc(initials(name))}</span>
       <span class="mail-text">
-        <span class="mail-top"><span class="sender">${esc(name)}</span><span class="stamp"><button type="button" class="mail-task" data-action="mail-to-task" data-subject="${esc(m.subject)}" data-from="${esc(name)}" data-link="${esc(url)}" title="Add to tasks" aria-label="Add to tasks">${icon('plus', 2)}Task</button>${multi ? `<span class="acct-dot" style="background:${safeColor(m.accountColor)}" title="${esc(m.accountEmail)}"></span>` : ''}${mailTime(m.date)}</span></span>
+        <span class="mail-top"><span class="sender">${esc(name)}</span><span class="stamp">${m.priority ? `<button type="button" class="mail-task unprio" data-action="unprioritise" data-key="${esc(m.key)}" data-sender="${esc(m.from.address)}" data-reason="${esc(m.priorityReason)}" title="Remove from Priority" aria-label="Remove from Priority">${icon('x', 2)}Priority</button>` : ''}<button type="button" class="mail-task" data-action="mail-to-task" data-subject="${esc(m.subject)}" data-from="${esc(name)}" data-link="${esc(url)}" title="Add to tasks" aria-label="Add to tasks">${icon('plus', 2)}Task</button>${multi ? `<span class="acct-dot" style="background:${safeColor(m.accountColor)}" title="${esc(m.accountEmail)}"></span>` : ''}${mailTime(m.date)}</span></span>
         <span class="subject">${esc(m.subject)}</span>
         <span class="preview">${esc(m.preview || ' ')}</span>
       </span></${tag}>`;
@@ -341,11 +341,12 @@
     if (!['all', 'priority'].includes(mailFilter) && !accts.some(a => a.id === mailFilter)) mailFilter = 'all';
     const list = M.messages.filter(m => mailFilter === 'all' || (mailFilter === 'priority' ? m.priority : m.accountId === mailFilter));
     const prioN = M.messages.filter(m => m.priority && m.unread).length;
-    return `<div style="max-width:960px"><section class="panel">
+    return `<div style="max-width:960px"><section class="panel mail-panel">
       <div class="panel-header"><h2 class="panel-title">Inbox ${M.unread ? `<span class="badge">${M.unread}</span>` : ''}</h2>
         <span class="header-tools"><button class="btn" type="button" data-action="accounts-refresh" ${M.busy ? 'disabled' : ''}>${M.busy ? 'Refreshing...' : 'Refresh'}</button></span></div>
-      ${`<div class="filters" role="group" aria-label="Show inbox"><button type="button" class="filter" data-filter="all" aria-pressed="${mailFilter === 'all'}">${accts.length > 1 ? 'All inboxes' : 'All mail'}</button><button type="button" class="filter" data-filter="priority" aria-pressed="${mailFilter === 'priority'}">Priority${prioN ? ` <span class="filter-count">${prioN}</span>` : ''}</button>${accts.length > 1 ? '<span class="filter-sep"></span>' : ''}${accts.length > 1 ? accts.map(a => `<button type="button" class="filter" data-filter="${a.id}" aria-pressed="${mailFilter === a.id}"><span class="acct-dot" style="background:${safeColor(a.color)}"></span>${esc(a.email)}${a.unread ? ` <span class="filter-count">${a.unread}</span>` : ''}</button>`).join('') : ''}</div>`}
+      ${`<div class="filters" role="group" aria-label="Show inbox"><button type="button" class="filter" data-filter="all" aria-pressed="${mailFilter === 'all'}">${accts.length > 1 ? 'All inboxes' : 'All mail'}</button><button type="button" class="filter" data-filter="priority" data-drop="priority" title="Drag emails here to add them to Priority" aria-pressed="${mailFilter === 'priority'}">Priority${prioN ? ` <span class="filter-count">${prioN}</span>` : ''}</button>${accts.length > 1 ? '<span class="filter-sep"></span>' : ''}${accts.length > 1 ? accts.map(a => `<button type="button" class="filter" data-filter="${a.id}" aria-pressed="${mailFilter === a.id}"><span class="acct-dot" style="background:${safeColor(a.color)}"></span>${esc(a.email)}${a.unread ? ` <span class="filter-count">${a.unread}</span>` : ''}</button>`).join('') : ''}</div>`}
       ${mailErrors()}
+      <div class="prio-drop" data-drop="priority" aria-hidden="true">${icon('star', 1.8)}Drop here to add to Priority</div>
       <div class="panel-divider"></div>
       ${list.length ? list.map(mailRow).join('') : `<div class="empty"><p>${M.busy ? 'Loading...' : 'Nothing here.'}</p></div>`}
       <div style="height:8px"></div></section></div>`;
@@ -582,6 +583,53 @@
     }
   });
 
+  /* ---------- toast ---------- */
+  let toastTimer = null;
+  function toast(html, ms) {
+    let t = document.getElementById('toast');
+    if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+    t.innerHTML = html; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), ms || 6000);
+  }
+
+  /* ---------- drag emails into Priority ---------- */
+  let dragMail = null;
+  document.addEventListener('dragstart', e => {
+    const row = e.target.closest && e.target.closest('.mail-row');
+    if (!row) return;
+    dragMail = { key: row.dataset.key, sender: row.dataset.sender, name: row.dataset.name, prio: row.dataset.prio === '1' };
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('text/plain', row.querySelector('.subject')?.textContent || 'Email');
+    document.body.classList.add('dragging-mail');
+    row.classList.add('drag-source');
+  });
+  document.addEventListener('dragend', () => {
+    dragMail = null;
+    document.body.classList.remove('dragging-mail');
+    document.querySelectorAll('.drag-source, .drop-over').forEach(el => el.classList.remove('drag-source', 'drop-over'));
+  });
+  document.addEventListener('dragover', e => {
+    if (dragMail) e.preventDefault(); // stop a stray drop from opening the email link
+    const z = dragMail && e.target.closest && e.target.closest('[data-drop=priority]');
+    if (!z) { if (dragMail) e.dataTransfer.dropEffect = 'none'; return; }
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    document.querySelectorAll('.drop-over').forEach(el => { if (el !== z) el.classList.remove('drop-over'); });
+    z.classList.add('drop-over');
+  });
+  document.addEventListener('dragleave', e => {
+    const z = e.target.closest && e.target.closest('[data-drop=priority]');
+    if (z && !z.contains(e.relatedTarget)) z.classList.remove('drop-over');
+  });
+  document.addEventListener('drop', async e => {
+    if (dragMail) e.preventDefault();
+    const z = e.target.closest && e.target.closest('[data-drop=priority]');
+    if (!z || !dragMail) return;
+    const d = dragMail;
+    document.body.classList.remove('dragging-mail');
+    await window.mm.setPriority({ key: d.key, sender: d.sender, value: true, scope: 'message' });
+    toast(`<span>Added to Priority</span>${d.sender ? `<button type="button" class="toast-btn" data-action="prio-sender" data-sender="${esc(d.sender)}">Always for ${esc(d.name)}</button>` : ''}`);
+  });
+
   function toggleSidebar() {
     const w = document.getElementById('app-window'); if (!w) return;
     const hidden = w.classList.toggle('sidebar-hidden');
@@ -627,7 +675,7 @@
   });
 
   document.addEventListener('click', async e => {
-    const mt = e.target.closest('[data-action=mail-to-task]');
+    const mt = e.target.closest('[data-action=mail-to-task], [data-action=unprioritise]');
     if (mt) e.preventDefault();
     const nav = e.target.closest('[data-view]');
     if (nav) { e.preventDefault(); go(nav.dataset.view, nav.dataset.scroll); return; }
@@ -646,6 +694,14 @@
     if (!a) return;
     const act = a.dataset.action, id = a.dataset.id;
     if (act === 'toggle-sidebar') { toggleSidebar(); return; }
+    if (act === 'prio-sender') { await window.mm.setPriority({ sender: a.dataset.sender, value: true, scope: 'sender' }); toast('<span>Every email from this sender will now show in Priority.</span>', 4000); return; }
+    if (act === 'unprioritise') {
+      e.preventDefault(); e.stopPropagation();
+      await window.mm.setPriority({ key: a.dataset.key, sender: a.dataset.sender, value: false, scope: 'message' });
+      toast(`<span>Removed from Priority</span>${a.dataset.sender ? `<button type="button" class="toast-btn" data-action="unprio-sender" data-sender="${esc(a.dataset.sender)}">Never for this sender</button>` : ''}`);
+      return;
+    }
+    if (act === 'unprio-sender') { await window.mm.setPriority({ sender: a.dataset.sender, value: false, scope: 'sender' }); toast('<span>Emails from this sender won\'t show in Priority.</span>', 4000); return; }
 
     if (act === 'google-signin') {
       welcomeMode = 'waiting'; render();
